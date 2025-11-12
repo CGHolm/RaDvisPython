@@ -73,7 +73,7 @@ class dataclass:
             self.sink_data['time'] = time
 
         # dtype = float64 for the Osryis implementation
-    def load(self, io, snap, path, sink_id, data_sphere_au = None, lv_cut = 0, verbose = 1, dtype = 'float32'):
+    def load(self, io, snap, path, sink_id, data_sphere_au = None, lv_cut = 0, verbose = 1, dtype = 'float32', shm = False):
         self.dtype = dtype
         self.io = io
         self.sink_id = sink_id
@@ -115,7 +115,7 @@ class dataclass:
             ####_______________________________LOADING DISPATCH DATA____________________________________####
             
             from .load_data.load import load_DISPATCH
-            self.load_DISPATCH(snap, path, self.loading_bar, verbose = verbose)
+            self.load_DISPATCH(snap, path, self.loading_bar, verbose = verbose, shm = shm)
             
         assert (self.amr['pos'].min() > -0.5) & (self.amr['pos'].max() < 0.5), 'Data snapshot might be corrupted'     
 

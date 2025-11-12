@@ -4,6 +4,8 @@ from ..path_config import config
 from .polytrope import calc_pressure, calc_gamma
 from ..main import dataclass
 import tqdm
+import tempfile
+import shutil
 
 def load_RAMSES(self, snap, path):
     sys.path.insert(0, config["user_osyris_path"])
@@ -21,7 +23,7 @@ def load_RAMSES(self, snap, path):
 
 dataclass.load_RAMSES = load_RAMSES
 
-def load_DISPATCH(self, snap, path, loading_bar, verbose):
+def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     if verbose > 0 and self.data_sphere_au != None:
         print(f'Only selecting patches for the combined dataset within {self.data_sphere_au} au and with level > {self.lv_cut}')
 
@@ -31,7 +33,16 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose):
     sys.path.insert(0, config["user_dispatch_path"])
     import dispatch as dis
 
-    sn = dis.snapshot(snap, '.', data = path)
+    if shm:
+        new_folder = tempfile.TemporaryDirectory(prefix='/dev/shm/')
+        path_internal = new_folder.name
+        source = os.path.join(path, '{:05d}'.format(snap)) # snapshot folder
+        dest = os.path.join(path_internal, '{:05d}'.format(snap))
+        _ = shutil.copytree(source, dest) # copy snapshot to shm
+    else:
+        path_internal = path
+
+    sn = dis.snapshot(snap, '.', data = path_internal)
 
     #Load in sink data closest to the snapshot time
     sn_times = np.array([sink_out.time for sink_out in sn.sinks[self.sink_id]])
@@ -98,6 +109,9 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose):
         self.amr[key] = np.array(self.amr[key], dtype = self.dtype).T
     for key in self.mhd:
         self.mhd[key] = np.array(self.mhd[key], dtype = self.dtype).T
+
+    if shm:
+        new_folder.cleanup() # delete the temporary shm folder
 
 dataclass.load_DISPATCH = load_DISPATCH
     
