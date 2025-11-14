@@ -33,6 +33,12 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     sys.path.insert(0, config["user_dispatch_path"])
     import dispatch as dis
 
+    if shm and (not os.path.isdir('/dev/shm')):
+        print("Warning: /dev/shm folder does not exist or is not a folder. Disabling shared memory caching.")
+        shm = False
+    if shm and (not os.access('/path/to/folder', os.W_OK)):
+        print("Warning: No write access to /dev/shm. Disabling shared memory caching.")
+        shm = False
     if shm:
         new_folder = tempfile.TemporaryDirectory(prefix='/dev/shm/')
         path_internal = new_folder.name
