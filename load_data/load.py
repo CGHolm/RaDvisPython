@@ -25,7 +25,7 @@ dataclass.load_RAMSES = load_RAMSES
 
 def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     if verbose > 0 and self.data_sphere_au != None:
-        print(f'Only selecting patches for the combined dataset within {self.data_sphere_au} au and with level > {self.lv_cut}')
+        print(f'Only selecting patches for the combined dataset within {self.data_sphere_au:4.1f} au and with level > {self.lv_cut}')
 
     self.amr = {key: [] for key in ['pos', 'ds']}
     self.mhd = {key: [] for key in ['vel', 'B', 'p','d', 'P', 'm', 'gamma', 'phi']}
@@ -36,7 +36,7 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     if shm and (not os.path.isdir('/dev/shm')):
         print("Warning: /dev/shm folder does not exist or is not a folder. Disabling shared memory caching.")
         shm = False
-    if shm and (not os.access('/path/to/folder', os.W_OK)):
+    if shm and (not os.access('/dev/shm', os.W_OK)):
         print("Warning: No write access to /dev/shm. Disabling shared memory caching.")
         shm = False
     if shm:
@@ -114,7 +114,11 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     self.mhd['m'] = np.empty((ncells,), dtype=self.dtype)
     self.mhd['gamma'] = np.empty((ncells,), dtype=self.dtype)
     self.mhd['phi'] = np.empty((ncells,), dtype=self.dtype)
-    for e,(p,m) in enumerate(zip(plist, pmask)):
+    
+    for e,(p,m) in tqdm.tqdm(enumerate(zip(plist, pmask)), 
+    disable = not loading_bar, 
+    total = len(plist),
+    desc = 'Extracting cell data from highest level patches'):
         self.amr['pos'][:, ocell[e]:ocell[e+1]] = p.xyz[:,m]
         self.amr['ds'][ocell[e]:ocell[e+1]] = p.ds[0]
         self.mhd['vel'][0, ocell[e]:ocell[e+1]] = p.var('ux')[m]
