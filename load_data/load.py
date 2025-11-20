@@ -74,7 +74,9 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     ocell = [0]
     plist = []
     pmask = []
-    for p in tqdm.tqdm(sorted_patches, disable = not loading_bar, desc = 'Loading patches'):
+    for p in tqdm.tqdm(sorted_patches, 
+                       disable = not loading_bar, 
+                       desc = 'Loading patches',):
         p.xyz = np.array(np.meshgrid(p.xi, p.yi, p.zi, indexing='ij'))
         
         nbors = [sn.patchid[i] for i in p.nbor_ids if i in sn.patchid]
