@@ -28,7 +28,12 @@ def extract_1D(self, variables,
     H_func = interp1d(r_plot, self.H_1D[:,0], fill_value='extrapolate')
 
     mask_r = (self.cyl_R > self.r_bins.min()) & (self.cyl_R < self.r_bins.max())
-    mask_h = abs(self.cyl_z[mask_r]) < n_σH * H_func(self.cyl_R[mask_r])
+
+    if type(n_σH) == tuple or type(n_σH) == list:
+        mask_h = (abs(self.cyl_z[mask_r]) > n_σH[0] * H_func(self.cyl_R[mask_r])) & ((abs(self.cyl_z[mask_r]) < n_σH[1] * H_func(self.cyl_R[mask_r])))
+    elif type(n_σH) == int:
+        mask_h = abs(self.cyl_z[mask_r]) < n_σH * H_func(self.cyl_R[mask_r])
+        
     mask = np.zeros_like(mask_r, dtype = 'bool')
     mask[mask_r] = mask_h
 
@@ -46,12 +51,10 @@ def extract_1D(self, variables,
     weights_dict = {ivs: [] for ivs in variables}
     for i, ivs in enumerate(variables):
         w = weights[i]
-        if w != None:
-            if w == 'mass': weights_dict[ivs] = self.m[mask]
-            if w == 'volume': weights_dict[ivs] = (self.amr['ds']**3)[mask]
-            if w == 'raw': continue
-        else: 
-            weights_dict[ivs] = np.ones(mask.sum())
+        if w == 'mass': weights_dict[ivs] = self.m[mask]
+        if w == 'volume': weights_dict[ivs] = (self.amr['ds']**3)[mask]
+        if w == 'count' : weights_dict[ivs] = np.ones(mask.sum())
+        if w == 'raw': continue            
 
     for i, ivs in enumerate(variables):
         if weights[i] == 'raw':

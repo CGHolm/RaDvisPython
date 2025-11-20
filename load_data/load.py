@@ -25,7 +25,7 @@ dataclass.load_RAMSES = load_RAMSES
 
 def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     if verbose > 0 and self.data_sphere_au != None:
-        print(f'Only selecting patches for the combined dataset within {self.data_sphere_au} au and with level > {self.lv_cut}')
+        print(f'Only selecting patches for the combined dataset within {self.data_sphere_au:4.1f} au and with level > {self.lv_cut}')
 
     self.amr = {key: [] for key in ['pos', 'ds']}
     self.mhd = {key: [] for key in ['vel', 'B', 'p','d', 'P', 'm', 'gamma', 'phi']}
@@ -33,6 +33,12 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     sys.path.insert(0, config["user_dispatch_path"])
     import dispatch as dis
 
+    if shm and (not os.path.isdir('/dev/shm')):
+        print("Warning: /dev/shm folder does not exist or is not a folder. Disabling shared memory caching.")
+        shm = False
+    if shm and (not os.access('/dev/shm', os.W_OK)):
+        print("Warning: No write access to /dev/shm. Disabling shared memory caching.")
+        shm = False
     if shm:
         new_folder = tempfile.TemporaryDirectory(prefix='/dev/shm/')
         path_internal = new_folder.name
@@ -64,16 +70,15 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     w = np.array([p.level for p in pp]).argsort()[::-1]
     sorted_patches = [pp[w[i]] for i in range(len(pp))]
 
-    for p in tqdm.tqdm(sorted_patches, disable = not loading_bar, desc = 'Loading patches'):
-        p.m = p.var('d') * np.prod(p.ds)
-        p.P = calc_pressure(p.var('d'))
-        p.γ = calc_gamma(p.var('d'))
+    ncells = 0
+    ocell = [0]
+    plist = []
+    pmask = []
+    for p in tqdm.tqdm(sorted_patches, 
+                       disable = not loading_bar, 
+                       desc = 'Loading patches',):
         p.xyz = np.array(np.meshgrid(p.xi, p.yi, p.zi, indexing='ij'))
-        p.vel_xyz = np.concatenate([p.var(f'u'+axis)[None,...] for axis in ['x','y','z']], axis = 0)
-        p.B =  np.concatenate([p.var(f'b'+axis)[None,...] for axis in ['x','y','z']], axis = 0)
-        p.p = np.concatenate([p.var(f'p'+axis)[None,...] for axis in ['x','y','z']], axis = 0)
         
-
         nbors = [sn.patchid[i] for i in p.nbor_ids if i in sn.patchid]
         children = [ n for n in nbors if n.level == p.level + 1]
         leafs = [n for n in children if ((n.position - p.position)**2).sum() < ((p.size)**2).sum()/12]
@@ -91,27 +96,49 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
             leaf_extent = np.vstack((lp.position - 0.5 * lp.size, lp.position + 0.5 * lp.size)).T
             covered_bool = ~np.all((p.xyz > leaf_extent[:, 0, None, None, None]) 
                                    & (p.xyz < leaf_extent[:, 1, None, None, None]), axis=0)
-            to_extract *= covered_bool 
+            to_extract *= covered_bool
         
-        self.amr['pos'].extend((p.xyz[:,to_extract].T).tolist())
-        self.amr['ds'].extend((p.ds[0] * np.ones(to_extract.sum())))
+        plist.append(p)
+        pmask.append(to_extract)
+        ncells += to_extract.sum()
+        ocell.append(ncells)
 
-        self.mhd['vel'].extend((p.vel_xyz[:,to_extract].T).tolist())
-        self.mhd['p'].extend((p.p[:,to_extract].T).tolist())
-        self.mhd['B'].extend((p.B[:,to_extract].T).tolist())
-        self.mhd['d'].extend((p.var('d')[to_extract].T).tolist())
-        self.mhd['P'].extend((p.P[to_extract].T).tolist())
-        self.mhd['m'].extend((p.m[to_extract].T).tolist())     
-        self.mhd['gamma'].extend((p.γ[to_extract].T).tolist())
-        self.mhd['phi'].extend((p.var('phi')[to_extract].T).tolist())
+    if loading_bar: print(f'Total number of cells loaded: {ncells}')
+    ocell = np.array(ocell, dtype=np.int64)
 
-    for key in self.amr:
-        self.amr[key] = np.array(self.amr[key], dtype = self.dtype).T
-    for key in self.mhd:
-        self.mhd[key] = np.array(self.mhd[key], dtype = self.dtype).T
+    self.amr['pos'] = np.empty((3, ncells), dtype=self.dtype)
+    self.amr['ds'] = np.empty((ncells,), dtype=self.dtype)
+    self.mhd['vel'] = np.empty((3, ncells), dtype=self.dtype)
+    self.mhd['p'] = np.empty((3, ncells), dtype=self.dtype)
+    self.mhd['B'] = np.empty((3, ncells), dtype=self.dtype)
+    self.mhd['d'] = np.empty((ncells,), dtype=self.dtype)
+    self.mhd['P'] = np.empty((ncells,), dtype=self.dtype)
+    self.mhd['m'] = np.empty((ncells,), dtype=self.dtype)
+    self.mhd['gamma'] = np.empty((ncells,), dtype=self.dtype)
+    self.mhd['phi'] = np.empty((ncells,), dtype=self.dtype)
+    
+    for e,(p,m) in tqdm.tqdm(enumerate(zip(plist, pmask)), 
+    disable = not loading_bar, 
+    total = len(plist),
+    desc = 'Extracting cell data from highest level patches'):
+        self.amr['pos'][:, ocell[e]:ocell[e+1]] = p.xyz[:,m]
+        self.amr['ds'][ocell[e]:ocell[e+1]] = p.ds[0]
+        self.mhd['vel'][0, ocell[e]:ocell[e+1]] = p.var('ux')[m]
+        self.mhd['vel'][1, ocell[e]:ocell[e+1]] = p.var('uy')[m]
+        self.mhd['vel'][2, ocell[e]:ocell[e+1]] = p.var('uz')[m]
+        self.mhd['p'][0, ocell[e]:ocell[e+1]] = p.var('px')[m]
+        self.mhd['p'][1, ocell[e]:ocell[e+1]] = p.var('py')[m]
+        self.mhd['p'][2, ocell[e]:ocell[e+1]] = p.var('pz')[m]
+        self.mhd['B'][0, ocell[e]:ocell[e+1]] = p.var('Bx')[m]
+        self.mhd['B'][1, ocell[e]:ocell[e+1]] = p.var('By')[m]
+        self.mhd['B'][2, ocell[e]:ocell[e+1]] = p.var('Bz')[m]
+        self.mhd['d'][ocell[e]:ocell[e+1]] = p.var('d')[m]
+        self.mhd['m'][ocell[e]:ocell[e+1]] = self.mhd['d'][ocell[e]:ocell[e+1]]*np.prod(p.ds)
+        self.mhd['P'][ocell[e]:ocell[e+1]] = calc_pressure(self.mhd['d'][ocell[e]:ocell[e+1]])
+        self.mhd['gamma'][ocell[e]:ocell[e+1]] = calc_gamma(self.mhd['d'][ocell[e]:ocell[e+1]])
+        self.mhd['phi'][ocell[e]:ocell[e+1]] = p.var('phi')[m]
 
     if shm:
         new_folder.cleanup() # delete the temporary shm folder
 
 dataclass.load_DISPATCH = load_DISPATCH
-    
