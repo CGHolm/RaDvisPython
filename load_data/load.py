@@ -51,13 +51,20 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     sn = dis.snapshot(snap, '.', data = path_internal)
 
     #Load in sink data closest to the snapshot time
-    sn_times = np.array([sink_out.time for sink_out in sn.sinks[self.sink_id]])
-    sn_i = np.argmin(abs(sn.time - sn_times))
-
-    self.sink_pos = sn.sinks[self.sink_id][sn_i].position.astype(self.dtype)
-    self.sink_vel = sn.sinks[self.sink_id][sn_i].velocity.astype(self.dtype) 
-    self.time = sn.sinks[self.sink_id][sn_i].time.astype(self.dtype) 
-    self.sink_mass = sn.sinks[self.sink_id][sn_i].mass.astype(self.dtype) 
+    try:
+        sn_times = np.array([sink_out.time for sink_out in sn.sinks[self.sink_id]])
+        sn_i = np.argmin(abs(sn.time - sn_times))
+        self.sink_pos = sn.sinks[self.sink_id][sn_i].position.astype(self.dtype)
+        self.sink_vel = sn.sinks[self.sink_id][sn_i].velocity.astype(self.dtype) 
+        self.time = sn.sinks[self.sink_id][sn_i].time.astype(self.dtype) 
+        self.sink_mass = sn.sinks[self.sink_id][sn_i].mass.astype(self.dtype) 
+    except:
+        if verbose > 0:
+            print('Sink could not be loaded, using "core_pos" and "core_vel" as sink position and velocity')
+        self.sink_pos = self.core_pos
+        self.sink_vel = self.core_vel 
+        self.time = sn.time
+        self.sink_mass = None
 
     #Sort the patces according to their level
     if self.data_sphere_au == None:
