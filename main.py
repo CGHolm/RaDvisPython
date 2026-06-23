@@ -73,7 +73,22 @@ class dataclass:
             self.sink_data['time'] = time
 
         # dtype = float64 for the Osryis implementation
-    def load(self, io, snap, path, sink_id, data_sphere_au = None, lv_cut = 0, verbose = 1, dtype = 'float32', shm = False):
+    def load(self, 
+             io, 
+             snap, 
+             path, 
+             sink_id, 
+             core_pos=None,
+             core_vel=None,
+             data_sphere_au = None, 
+             lv_min = 0,
+             lv_max = 20, 
+             verbose = 1, 
+             dtype = 'float32', 
+             shm = False):
+        if core_pos is not None:
+            self.core_pos = core_pos
+            self.core_vel = core_vel
         self.dtype = dtype
         self.io = io
         self.sink_id = sink_id
@@ -91,7 +106,7 @@ class dataclass:
             self.amr['ds'] = np.array(data['amr']['dx']._array / self.l_cgs, dtype=self.dtype).squeeze()
 
             #Osyris reads in the data but assigns cgs units.
-            # Nexus reverts this so both Dispatch and RAMSES data will be handled in code units 
+            # Radvis reverts this so both Dispatch and RAMSES data will be handled in code units 
             # to avoid excessive memery usage and overflow problems
             for save, read, unit in zip(['vel', 'B'], ['velocity', 'B_field'], ['v_cgs', 'B_cgs']):
                  self.mhd[save] = np.asarray([getattr(data['hydro'][read], coor)._array / getattr(self, unit) for coor in ['x', 'y', 'z']], dtype = self.dtype)
@@ -102,15 +117,24 @@ class dataclass:
             self.mhd['gamma'] = np.array(data['hydro']['gamma']._array, dtype = self.dtype).squeeze() 
 
             del data
-            s=rsink(snap, datadir=path, sink_id=self.sink_id)
-            self.sink_pos = (np.array([s[coor][self.sink_id] for coor in ['x','y','z']], dtype = self.dtype) - 0.5)
-            self.sink_vel = np.array([s[v_comp][self.sink_id] for v_comp in ['ux', 'uy', 'uz']], dtype = self.dtype) 
-            self.time = s['snapshot_time']
-            self.sink_mass = s['m'][self.sink_id] 
-        
+            try:
+                s=rsink(snap, datadir=path, sink_id=self.sink_id)
+                self.sink_pos = (np.array([s[coor][self.sink_id] for coor in ['x','y','z']], dtype = self.dtype) - 0.5)
+                self.sink_vel = np.array([s[v_comp][self.sink_id] for v_comp in ['ux', 'uy', 'uz']], dtype = self.dtype) 
+                self.time = s['snapshot_time']
+                self.sink_mass = s['m'][self.sink_id] 
+            except:
+                if verbose > 0:
+                    print('Sink could not be loaded, using "core_pos" and "core_vel" as sink position and velocity')
+                self.sink_pos = core_pos
+                self.sink_vel = core_vel 
+                self.time = None
+                self.sink_mass = None
+
         if self.io == 'DISPATCH':
             self.data_sphere_au = data_sphere_au
-            self.lv_cut = lv_cut 
+            self.lv_min = lv_min 
+            self.lv_max = lv_max 
             
             ####_______________________________LOADING DISPATCH DATA____________________________________####
             
@@ -164,7 +188,15 @@ class dataclass:
         if verbose != 0: print(f'Converged mean angular momentum vector after {L_iter} iteration(s)')
 
 
-    def calc_trans_xyz(self, verbose = 1, top = 'L'):
+    def calc_trans_xyz(self, verbose = 1, top = 'L', basis = None):
+
+        #new_basis should be a dictionary with 3 entries like the one below: 
+        #new_basis = {'new_x': np.array([0.14234737,  0.41367227, -0.89922883]),
+        #     'new_y': np.array([0.41367227, 0.80047313, 0.43372575]),
+        #     'L': np.array([0.89922883, -0.43372575, -0.0571795 
+        # They must span the entire 3D coordianate system e.g. x cross y = z
+
+
         try: self.e_r
         except: self.recalc_L()
 
@@ -188,23 +220,28 @@ class dataclass:
         theta = np.arccos(np.clip(np.dot(np.array([0, 0, 1]), self.L), -1.0, 1.0))
         rotation_matrix = rotation_matrix_func(rotation_axis, theta)
         self.rotation_matrix = rotation_matrix
+        if basis == None:
+            if verbose > 0:
+                print('Transforming old z-coordinate into mean angular momentum vector')
+            self.new_x = np.dot(self.rotation_matrix, np.array([1,0,0])) 
+            self.new_y = np.dot(self.rotation_matrix, np.array([0,1,0]))
+            self.L = np.dot(self.rotation_matrix, np.array([0, 0, 1]))
 
-        if verbose > 0:
-            print('Transforming old z-coordinate into mean angular momentum vector')
-        self.new_x = np.dot(self.rotation_matrix, np.array([1,0,0])) 
-        self.new_y = np.dot(self.rotation_matrix, np.array([0,1,0]))
-        self.L = np.dot(self.rotation_matrix, np.array([0, 0, 1]))
-
-        if top != 'L':
-            if top == 'x':
-                new_x = self.new_y.copy()
-                new_y = self.L.copy()
-                new_L = self.new_x.copy()
-            elif top == 'y':
-                new_x = self.L.copy()
-                new_y = self.new_x.copy()
-                new_L = self.new_y.copy()
-            self.new_x = new_x; self.new_y = new_y; self.L = new_L
+            if top != 'L':
+                if top == 'x':
+                    new_x = self.new_y.copy()
+                    new_y = self.L.copy()
+                    new_L = self.new_x.copy()
+                elif top == 'y':
+                    new_x = self.L.copy()
+                    new_y = self.new_x.copy()
+                    new_L = self.new_y.copy()
+                self.new_x = new_x; self.new_y = new_y; self.L = new_L
+        else:
+            self.new_x = basis['new_x']
+            self.new_y = basis['new_y']
+            self.L = basis['L']
+            if verbose > 0: print('Transforming old z-coordinate into mean angular momentum vector from given basis')
 
         self.trans_xyz = np.array([np.sum(coor[:, None] * self.rel_xyz, axis=0) for coor in [self.new_x, self.new_y, self.L]]).astype(self.dtype)
         self.trans_B = np.array([np.sum(coor[:, None] * self.mhd['B'], axis=0) for coor in [self.new_x, self.new_y, self.L]]).astype(self.dtype)
@@ -254,7 +291,7 @@ class HiddenPrints:
 calc_ang = lambda vector1, vector2: np.rad2deg(np.arccos(np.dot(vector1, vector2) / (np.linalg.norm(vector1) * np.linalg.norm(vector2))))
 
 def process_snapshot(snapshot, sink, path):
-    from nexus.path_config import config
+    from radvis.path_config import config
     sys.path.insert(0,config['user_dispatch_path'])
     import dispatch as dis
     sn = int(snapshot)

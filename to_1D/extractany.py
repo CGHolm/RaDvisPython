@@ -7,6 +7,7 @@ from ..path_config import config
 def extract_1D(self, variables,
                weights,
                n_σH = 3,
+               surface_extraction_pct = None,
                data_name = 'data1'):
     
     try: self.extract1D_ivs[data_name] = {}
@@ -31,8 +32,13 @@ def extract_1D(self, variables,
 
     if type(n_σH) == tuple or type(n_σH) == list:
         mask_h = (abs(self.cyl_z[mask_r]) > n_σH[0] * H_func(self.cyl_R[mask_r])) & ((abs(self.cyl_z[mask_r]) < n_σH[1] * H_func(self.cyl_R[mask_r])))
-    elif type(n_σH) == int:
-        mask_h = abs(self.cyl_z[mask_r]) < n_σH * H_func(self.cyl_R[mask_r])
+    
+    if type(n_σH) == int or type(n_σH) == float:
+        if not surface_extraction_pct:
+            mask_h = abs(self.cyl_z[mask_r]) < n_σH * H_func(self.cyl_R[mask_r])
+        else:
+            mask_h = ((abs(self.cyl_z[mask_r]) < (1 + surface_extraction_pct) * n_σH * H_func(self.cyl_R[mask_r])) &
+                (abs(self.cyl_z[mask_r]) > (1 - surface_extraction_pct) * n_σH * H_func(self.cyl_R[mask_r])))
         
     mask = np.zeros_like(mask_r, dtype = 'bool')
     mask[mask_r] = mask_h
