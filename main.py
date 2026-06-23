@@ -73,7 +73,21 @@ class dataclass:
             self.sink_data['time'] = time
 
         # dtype = float64 for the Osryis implementation
-    def load(self, io, snap, path, sink_id, data_sphere_au = None, lv_cut = 0, verbose = 1, dtype = 'float32', shm = False):
+    def load(self, 
+             io, 
+             snap, 
+             path, 
+             sink_id, 
+             core_pos=None,
+             core_vel=None,
+             data_sphere_au = None, 
+             lv_cut = 0, 
+             verbose = 1, 
+             dtype = 'float32', 
+             shm = False):
+        if core_pos is not None:
+            self.core_pos = core_pos
+            self.core_vel = core_vel
         self.dtype = dtype
         self.io = io
         self.sink_id = sink_id
@@ -91,7 +105,7 @@ class dataclass:
             self.amr['ds'] = np.array(data['amr']['dx']._array / self.l_cgs, dtype=self.dtype).squeeze()
 
             #Osyris reads in the data but assigns cgs units.
-            # Nexus reverts this so both Dispatch and RAMSES data will be handled in code units 
+            # Radvis reverts this so both Dispatch and RAMSES data will be handled in code units 
             # to avoid excessive memery usage and overflow problems
             for save, read, unit in zip(['vel', 'B'], ['velocity', 'B_field'], ['v_cgs', 'B_cgs']):
                  self.mhd[save] = np.asarray([getattr(data['hydro'][read], coor)._array / getattr(self, unit) for coor in ['x', 'y', 'z']], dtype = self.dtype)
@@ -102,12 +116,20 @@ class dataclass:
             self.mhd['gamma'] = np.array(data['hydro']['gamma']._array, dtype = self.dtype).squeeze() 
 
             del data
-            s=rsink(snap, datadir=path, sink_id=self.sink_id)
-            self.sink_pos = (np.array([s[coor][self.sink_id] for coor in ['x','y','z']], dtype = self.dtype) - 0.5)
-            self.sink_vel = np.array([s[v_comp][self.sink_id] for v_comp in ['ux', 'uy', 'uz']], dtype = self.dtype) 
-            self.time = s['snapshot_time']
-            self.sink_mass = s['m'][self.sink_id] 
-        
+            try:
+                s=rsink(snap, datadir=path, sink_id=self.sink_id)
+                self.sink_pos = (np.array([s[coor][self.sink_id] for coor in ['x','y','z']], dtype = self.dtype) - 0.5)
+                self.sink_vel = np.array([s[v_comp][self.sink_id] for v_comp in ['ux', 'uy', 'uz']], dtype = self.dtype) 
+                self.time = s['snapshot_time']
+                self.sink_mass = s['m'][self.sink_id] 
+            except:
+                if verbose > 0:
+                    print('Sink could not be loaded, using "core_pos" and "core_vel" as sink position and velocity')
+                self.sink_pos = core_pos
+                self.sink_vel = core_vel 
+                self.time = None
+                self.sink_mass = None
+
         if self.io == 'DISPATCH':
             self.data_sphere_au = data_sphere_au
             self.lv_cut = lv_cut 
@@ -254,7 +276,7 @@ class HiddenPrints:
 calc_ang = lambda vector1, vector2: np.rad2deg(np.arccos(np.dot(vector1, vector2) / (np.linalg.norm(vector1) * np.linalg.norm(vector2))))
 
 def process_snapshot(snapshot, sink, path):
-    from nexus.path_config import config
+    from radvis.path_config import config
     sys.path.insert(0,config['user_dispatch_path'])
     import dispatch as dis
     sn = int(snapshot)
