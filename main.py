@@ -188,7 +188,15 @@ class dataclass:
         if verbose != 0: print(f'Converged mean angular momentum vector after {L_iter} iteration(s)')
 
 
-    def calc_trans_xyz(self, verbose = 1, top = 'L'):
+    def calc_trans_xyz(self, verbose = 1, top = 'L', basis = None):
+
+        #new_basis should be a dictionary with 3 entries like the one below: 
+        #new_basis = {'new_x': np.array([0.14234737,  0.41367227, -0.89922883]),
+        #     'new_y': np.array([0.41367227, 0.80047313, 0.43372575]),
+        #     'L': np.array([0.89922883, -0.43372575, -0.0571795 
+        # They must span the entire 3D coordianate system e.g. x cross y = z
+
+
         try: self.e_r
         except: self.recalc_L()
 
@@ -212,23 +220,28 @@ class dataclass:
         theta = np.arccos(np.clip(np.dot(np.array([0, 0, 1]), self.L), -1.0, 1.0))
         rotation_matrix = rotation_matrix_func(rotation_axis, theta)
         self.rotation_matrix = rotation_matrix
+        if basis == None:
+            if verbose > 0:
+                print('Transforming old z-coordinate into mean angular momentum vector')
+            self.new_x = np.dot(self.rotation_matrix, np.array([1,0,0])) 
+            self.new_y = np.dot(self.rotation_matrix, np.array([0,1,0]))
+            self.L = np.dot(self.rotation_matrix, np.array([0, 0, 1]))
 
-        if verbose > 0:
-            print('Transforming old z-coordinate into mean angular momentum vector')
-        self.new_x = np.dot(self.rotation_matrix, np.array([1,0,0])) 
-        self.new_y = np.dot(self.rotation_matrix, np.array([0,1,0]))
-        self.L = np.dot(self.rotation_matrix, np.array([0, 0, 1]))
-
-        if top != 'L':
-            if top == 'x':
-                new_x = self.new_y.copy()
-                new_y = self.L.copy()
-                new_L = self.new_x.copy()
-            elif top == 'y':
-                new_x = self.L.copy()
-                new_y = self.new_x.copy()
-                new_L = self.new_y.copy()
-            self.new_x = new_x; self.new_y = new_y; self.L = new_L
+            if top != 'L':
+                if top == 'x':
+                    new_x = self.new_y.copy()
+                    new_y = self.L.copy()
+                    new_L = self.new_x.copy()
+                elif top == 'y':
+                    new_x = self.L.copy()
+                    new_y = self.new_x.copy()
+                    new_L = self.new_y.copy()
+                self.new_x = new_x; self.new_y = new_y; self.L = new_L
+        else:
+            self.new_x = basis['new_x']
+            self.new_y = basis['new_y']
+            self.L = basis['L']
+            if verbose > 0: print('Transforming old z-coordinate into mean angular momentum vector from given basis')
 
         self.trans_xyz = np.array([np.sum(coor[:, None] * self.rel_xyz, axis=0) for coor in [self.new_x, self.new_y, self.L]]).astype(self.dtype)
         self.trans_B = np.array([np.sum(coor[:, None] * self.mhd['B'], axis=0) for coor in [self.new_x, self.new_y, self.L]]).astype(self.dtype)
