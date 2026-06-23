@@ -81,7 +81,8 @@ class dataclass:
              core_pos=None,
              core_vel=None,
              data_sphere_au = None, 
-             lv_cut = 0, 
+             lv_min = 0,
+             lv_max = 20, 
              verbose = 1, 
              dtype = 'float32', 
              shm = False):
@@ -132,7 +133,8 @@ class dataclass:
 
         if self.io == 'DISPATCH':
             self.data_sphere_au = data_sphere_au
-            self.lv_cut = lv_cut 
+            self.lv_min = lv_min 
+            self.lv_max = lv_max 
             
             ####_______________________________LOADING DISPATCH DATA____________________________________####
             
