@@ -23,12 +23,20 @@ def load_RAMSES(self, snap, path):
 
 dataclass.load_RAMSES = load_RAMSES
 
-def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
+def load_DISPATCH(self, 
+                  snap, 
+                  path, 
+                  loading_bar, 
+                  lagrangian_forces,
+                  shm,
+                  verbose):
     if verbose > 0 and self.data_sphere_au != None:
         print(f'Only selecting patches for the combined dataset within {self.data_sphere_au:4.1f} au and with {self.lv_min} < level < {self.lv_max}')
 
     self.amr = {key: [] for key in ['pos', 'ds']}
     self.mhd = {key: [] for key in ['vel', 'B', 'p','d', 'P', 'm', 'gamma', 'phi']}
+    if lagrangian_forces:
+        self.force = {key: [] for key in ['inertia', 'lorentz', 'gradP', 'gravity']}
 
     sys.path.insert(0, config["user_dispatch_path"])
     import dispatch as dis
@@ -123,6 +131,13 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
     self.mhd['m'] = np.empty((ncells,), dtype=self.dtype)
     self.mhd['gamma'] = np.empty((ncells,), dtype=self.dtype)
     self.mhd['phi'] = np.empty((ncells,), dtype=self.dtype)
+    if lagrangian_forces:
+        self.force['gradP'] = np.empty((3, ncells), dtype=self.dtype)
+        self.force['lorentz'] = np.empty((3, ncells), dtype=self.dtype)
+        self.force['inertia'] = np.empty((3, ncells), dtype=self.dtype)
+        self.force['gravity'] = np.empty((3, ncells), dtype=self.dtype)
+
+        if verbose > 0 : print('Including force balance from lagrangian momentum equation')
     
     for e,(p,m) in tqdm.tqdm(enumerate(zip(plist, pmask)), 
     disable = not loading_bar, 
@@ -144,8 +159,89 @@ def load_DISPATCH(self, snap, path, loading_bar, verbose, shm=False):
         self.mhd['P'][ocell[e]:ocell[e+1]] = calc_pressure(self.mhd['d'][ocell[e]:ocell[e+1]])
         self.mhd['gamma'][ocell[e]:ocell[e+1]] = calc_gamma(self.mhd['d'][ocell[e]:ocell[e+1]])
         self.mhd['phi'][ocell[e]:ocell[e+1]] = p.var('phi')[m]
-
+        if lagrangian_forces:
+            self.force['gradP'][:, ocell[e]:ocell[e+1]]   = _pressure_gradient_patch(p)[:, m]
+            self.force['lorentz'][:, ocell[e]:ocell[e+1]] = _magnetic_force_patch(p)[:, m]
+            self.force['inertia'][:, ocell[e]:ocell[e+1]]  = _intertia_patch(p, self.sink_vel)[:, m]
+            self.force['gravity'][:, ocell[e]:ocell[e+1]]  = _gravity_patch(p, self.sink_mass, self.sink_pos, self.G_code)[:, m]
     if shm:
         new_folder.cleanup() # delete the temporary shm folder
 
 dataclass.load_DISPATCH = load_DISPATCH
+
+def _intertia_patch(p, sink_vel):
+    # CODE UNITS !!!!
+    #     
+    ds  = np.asarray(p.ds) 
+    vx = p.var('ux', all=True) - sink_vel[0]
+    vy = p.var('uy', all=True) - sink_vel[1]
+    vz = p.var('uz', all=True) - sink_vel[2]
+    
+    f = np.zeros((3,) + vx.shape)    
+    dev_func = lambda v, axis : np.gradient(v, ds[axis], axis = axis) 
+    for i, v_comp in enumerate([vx, vy, vz]):
+        f[i,...] = vx * dev_func(v_comp, 0) + vy * dev_func(v_comp, 1) + vz * dev_func(v_comp, 2)
+
+    # trim guard zones back to the interior
+    ng = np.asarray(p.ng); n = np.asarray(p.n)
+    sl = (slice(None),) + tuple(slice(ng[k], ng[k]+n[k]) for k in range(3))
+    return f[sl] * p.var('d') #!!!! PLUS
+
+
+def _magnetic_force_patch(p):
+    # CODE UNITS !!!!
+
+    ds  = np.asarray(p.ds)                   # cell size (code), per axisT
+    Bx = p.var('Bx', all=True)                   # guard-padded, code (Gauss)
+    By = p.var('By', all=True) 
+    Bz = p.var('Bz', all=True) 
+
+    # centred-difference curl on the padded arrays (== code's ddx, with physical spacing)
+    Jx = np.gradient(Bz, ds[1], axis=1) - np.gradient(By, ds[2], axis=2)
+    Jy = np.gradient(Bx, ds[2], axis=2) - np.gradient(Bz, ds[0], axis=0)
+    Jz = np.gradient(By, ds[0], axis=0) - np.gradient(Bx, ds[1], axis=1)
+
+    # Lorentz force density  +(∇×B)×B    [code units]
+    fx = (Jy*Bz - Jz*By) 
+    fy = (Jz*Bx - Jx*Bz) 
+    fz = (Jx*By - Jy*Bx) 
+    f  = - np.stack([fx, fy, fz])
+
+    # trim guard zones back to the interior
+    ng = np.asarray(p.ng); n = np.asarray(p.n)
+    sl = (slice(None),) + tuple(slice(ng[k], ng[k]+n[k]) for k in range(3))
+    return - f[sl] #!!!! MINUS
+
+def _pressure_gradient_patch(p):
+    P = calc_pressure(p.var('d', all = True))
+    ds  = np.asarray(p.ds)
+    
+    f = np.zeros((3,) + P.shape)
+    dev_func = lambda v, axis : np.gradient(v, ds[axis], axis = axis) 
+    for i in range(3):
+        f[i,...] = dev_func(P, i)
+
+        # trim guard zones back to the interior
+    ng = np.asarray(p.ng); n = np.asarray(p.n)
+    sl = (slice(None),) + tuple(slice(ng[k], ng[k]+n[k]) for k in range(3))
+    return f[sl] #!!!! PLUS
+
+def _gravity_patch(p, sink_mass, sink_pos, G):
+    ds  = np.asarray(p.ds)
+    phi = p.var('phi', all=True).copy()
+    
+    if sink_mass != None:
+        dist2sink_22grid = np.array(np.meshgrid(p.x, p.y, p.z, indexing='ij')) - sink_pos[:,None, None, None]
+        φ_sink = - G * sink_mass / np.linalg.norm(dist2sink_22grid, axis = 0)
+        φ_sink[np.isnan(φ_sink)] = 0  
+        phi += φ_sink
+    
+    f = np.zeros((3,) + phi.shape)
+    dev_func = lambda v, axis : np.gradient(v, ds[axis], axis = axis) 
+    for i in range(3):
+        f[i,...] = dev_func(phi, i)
+
+    ng, n = np.asarray(p.ng), np.asarray(p.n)
+    sl = (slice(None),) + tuple(slice(ng[k], ng[k]+n[k]) for k in range(3))
+    
+    return - f[sl] * p.var('d') #!!!! MINUS                                              

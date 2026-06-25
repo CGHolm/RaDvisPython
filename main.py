@@ -24,6 +24,7 @@ class dataclass:
         self.Σ_cgs = self.d_cgs * self.l_cgs
         self.P_cgs = self.d_cgs * (self.l_cgs / self.t_cgs)**2
         self.B_cgs = np.sqrt(4.0 * np.pi * self.d_cgs * self.v_cgs ** 2)
+        self.G_code = 100.03560500146355 # From sn.scaling.Grav
         self.loading_bar = loading_bar
 
         self.amr = {}
@@ -85,6 +86,7 @@ class dataclass:
              lv_max = 20, 
              verbose = 1, 
              dtype = 'float32', 
+             lagrangian_forces = 0,
              shm = False):
         if core_pos is not None:
             self.core_pos = core_pos
@@ -139,7 +141,12 @@ class dataclass:
             ####_______________________________LOADING DISPATCH DATA____________________________________####
             
             from .load_data.load import load_DISPATCH
-            self.load_DISPATCH(snap, path, self.loading_bar, verbose = verbose, shm = shm)
+            self.load_DISPATCH(snap, 
+                               path, 
+                               self.loading_bar, 
+                               lagrangian_forces = lagrangian_forces, 
+                               shm = shm, 
+                               verbose = verbose)
             
         assert (self.amr['pos'].min() > -0.5) & (self.amr['pos'].max() < 0.5), 'Data snapshot might be corrupted'     
 
