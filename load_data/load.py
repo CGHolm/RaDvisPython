@@ -188,7 +188,7 @@ def _intertia_patch(p, sink_vel):
     return f[sl] * p.var('d') #!!!! PLUS
 
 
-def _magnetic_force_patch(p):
+def _magnetic_force_patch_old(p):
     # CODE UNITS !!!!
 
     ds  = np.asarray(p.ds)                   # cell size (code), per axisT
@@ -205,12 +205,51 @@ def _magnetic_force_patch(p):
     fx = (Jy*Bz - Jz*By) 
     fy = (Jz*Bx - Jx*Bz) 
     fz = (Jx*By - Jy*Bx) 
-    f  = - np.stack([fx, fy, fz])
+    f  = np.stack([fx, fy, fz])
 
     # trim guard zones back to the interior
     ng = np.asarray(p.ng); n = np.asarray(p.n)
     sl = (slice(None),) + tuple(slice(ng[k], ng[k]+n[k]) for k in range(3))
     return - f[sl] #!!!! MINUS
+
+
+def _magnetic_force_patch(p):
+    # CODE UNITS !!!!
+
+    Bx = p.var('Bx', all=0)                   # guard-padded, cgs (Gauss)
+    By = p.var('By', all=0) 
+    Bz = p.var('Bz', all=0) 
+
+    gc = int((p.gn - p.n)[0] / 2)
+    #________________________________________________________________________________________
+    Jx_corner = (ddy(zdn(p.var('bz', all=True))) - ddz(ydn(p.var('by', all=True)))) / (p.ds[0])
+
+    # [gn, gn-1, gn-1]
+    Jx = 0.25 * (Jx_corner[:, :-1, :-1] + Jx_corner[:, 1:, :-1]
+            + Jx_corner[:, :-1, 1:]  + Jx_corner[:, 1:, 1:])
+
+    Jx_centered = Jx[gc:-gc, gc:-(gc - 1), gc:-(gc - 1)]
+
+    #________________________________________________________________________________________
+    Jy_corner = (ddz(xdn(p.var('bx', all=True))) - ddx(zdn(p.var('bz', all=True)))) / (p.ds[0])
+    # [gn-1, gn, gn-1]
+    Jy = 0.25 * (Jy_corner[:-1,  :, :-1] + Jy_corner[1:, :, :-1]
+            + Jy_corner[ :-1, :, 1:]  + Jy_corner[1:, :, 1:])
+
+    Jy_centered = Jy[gc:-(gc - 1), gc:-gc, gc:-(gc - 1)]
+
+    #________________________________________________________________________________________
+    Jz_corner = (ddx(ydn(p.var('by', all=True))) - ddy(xdn(p.var('bx', all=True)))) / (p.ds[0])
+    # [gn-1, gn-1, gn]
+    Jz = 0.25 * (Jz_corner[:-1, :-1,:] + Jz_corner[1:, :-1,:]
+            + Jz_corner[:-1, 1:,:]  + Jz_corner[1:, 1:,:])
+
+    Jz_centered = Jz[gc:-(gc - 1),gc:-(gc - 1), gc:-gc]
+    #_______________________________________________________________________________________
+    return np.stack([-(Jy_centered*Bz - Jz_centered*By), 
+                     -(Jz_centered*Bx - Jx_centered*Bz), 
+                     -(Jx_centered*By - Jy_centered*Bx)])  # = -(∇×B)×B, edge-centred calculation, trimmed to interior
+
 
 def _pressure_gradient_patch(p):
     P = calc_pressure(p.var('d', all = True))
@@ -244,4 +283,40 @@ def _gravity_patch(p, sink_mass, sink_pos, G):
     ng, n = np.asarray(p.ng), np.asarray(p.n)
     sl = (slice(None),) + tuple(slice(ng[k], ng[k]+n[k]) for k in range(3))
     
-    return - f[sl] * p.var('d') #!!!! MINUS                                              
+    return - f[sl] * p.var('d') #!!!! MINUS                                             
+
+def dnup(q, shift=1, axis=0):
+    i = 0 if shift==1 else -1
+    if axis == 0 and q.shape[0] > 1:
+        f = (q+np.roll(q,shift,axis))*0.5
+        f[i,:,:] = q[i,:,:]
+    elif axis == 1 and q.shape[1] > 1:
+        f = (q+np.roll(q,shift,axis))*0.5
+        f[:,i,:] = q[:,i,:]
+    elif axis == 2 and q.shape[2] > 1:
+        f = (q+np.roll(q,shift,axis))*0.5
+        f[:,:,i] = q[:,:,i]
+    else:
+        f = q
+    return f
+
+def xdn(f):
+    return dnup(f,1,0)
+def ydn(f):
+    return dnup(f,1,1)
+def zdn(f):
+    return dnup(f,1,2)
+
+def xup(f):
+    return dnup(f,-1,0)
+def yup(f):
+    return dnup(f,-1,1)
+def zup(f):
+    return dnup(f,-1,2)
+
+def ddx(f):
+    return dnup(f,-1,0)-dnup(f,1,0)
+def ddy(f):
+    return dnup(f,-1,1)-dnup(f,1,1)
+def ddz(f):
+    return dnup(f,-1,2)-dnup(f,1,2) 
