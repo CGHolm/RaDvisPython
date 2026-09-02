@@ -40,6 +40,8 @@ def load_DISPATCH(self,
 
     sys.path.insert(0, config["user_dispatch_path"])
     import dispatch as dis
+    if verbose > 0:
+        print(f"dispatch loaded from {os.path.dirname(dis.__file__)}")
 
     if shm and (not os.path.isdir('/dev/shm')):
         print("Warning: /dev/shm folder does not exist or is not a folder. Disabling shared memory caching.")
@@ -64,9 +66,13 @@ def load_DISPATCH(self,
             sn_times = np.array([sink_out.time for sink_out in sn.sinks[self.sink_id]])
             sn_i = np.argmin(abs(sn.time - sn_times))
             self.sink_pos = sn.sinks[self.sink_id][sn_i].position.astype(self.dtype)
-            self.sink_vel = sn.sinks[self.sink_id][sn_i].velocity.astype(self.dtype) 
-            self.time = sn.sinks[self.sink_id][sn_i].time.astype(self.dtype) 
-            self.sink_mass = sn.sinks[self.sink_id][sn_i].mass.astype(self.dtype) 
+            self.sink_vel = sn.sinks[self.sink_id][sn_i].velocity.astype(self.dtype)
+            try: 
+                self.time = sn.sinks[self.sink_id][sn_i].time.astype(self.dtype) 
+                self.sink_mass = sn.sinks[self.sink_id][sn_i].mass.astype(self.dtype)
+            except:
+                self.time = sn.sinks[self.sink_id][sn_i].time 
+                self.sink_mass = sn.sinks[self.sink_id][sn_i].mass
         except:
             if verbose > 0:
                 print('Sink could not be loaded, using "core_pos" and "core_vel" as sink position and velocity')
