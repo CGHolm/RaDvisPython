@@ -36,7 +36,7 @@ def load_DISPATCH(self,
     self.amr = {key: [] for key in ['pos', 'ds']}
     self.mhd = {key: [] for key in ['vel', 'B', 'p','d', 'P', 'm', 'gamma', 'phi']}
     if lagrangian_forces:
-        self.force = {key: [] for key in ['inertia', 'lorentz', 'gradP', 'gravity']}
+        self.force = {key: [] for key in ['advective_acc', 'lorentz', 'gradP', 'gravity']}
 
     sys.path.insert(0, config["user_dispatch_path"])
     import dispatch as dis
@@ -56,116 +56,118 @@ def load_DISPATCH(self,
     else:
         path_internal = path
 
-    sn = dis.snapshot(snap, '.', data = path_internal)
-
-    #Load in sink data closest to the snapshot time
     try:
-        sn_times = np.array([sink_out.time for sink_out in sn.sinks[self.sink_id]])
-        sn_i = np.argmin(abs(sn.time - sn_times))
-        self.sink_pos = sn.sinks[self.sink_id][sn_i].position.astype(self.dtype)
-        self.sink_vel = sn.sinks[self.sink_id][sn_i].velocity.astype(self.dtype) 
-        self.time = sn.sinks[self.sink_id][sn_i].time.astype(self.dtype) 
-        self.sink_mass = sn.sinks[self.sink_id][sn_i].mass.astype(self.dtype) 
-    except:
-        if verbose > 0:
-            print('Sink could not be loaded, using "core_pos" and "core_vel" as sink position and velocity')
-        self.sink_pos = self.core_pos
-        self.sink_vel = self.core_vel 
-        self.time = sn.time
-        self.sink_mass = None
+        sn = dis.snapshot(snap, '.', data = path_internal)
 
-    #Sort the patces according to their level
-    if self.data_sphere_au == None:
-        pp = [p for p in sn.patches if (p.level >= self.lv_min) & (p.level <= self.lv_max)]
-    else:
-        pp = [p for p in sn.patches 
-              if (np.linalg.norm(np.array(np.meshgrid(p.xi, p.yi, p.zi, indexing='ij')) - self.sink_pos[:,None,None,None], axis = 0) < self.data_sphere_au / self.code2au).any()  
-              and p.level >= self.lv_min and p.level <= self.lv_max]
-        
-    w = np.array([p.level for p in pp]).argsort()[::-1]
-    sorted_patches = [pp[w[i]] for i in range(len(pp))]
+        #Load in sink data closest to the snapshot time
+        try:
+            sn_times = np.array([sink_out.time for sink_out in sn.sinks[self.sink_id]])
+            sn_i = np.argmin(abs(sn.time - sn_times))
+            self.sink_pos = sn.sinks[self.sink_id][sn_i].position.astype(self.dtype)
+            self.sink_vel = sn.sinks[self.sink_id][sn_i].velocity.astype(self.dtype) 
+            self.time = sn.sinks[self.sink_id][sn_i].time.astype(self.dtype) 
+            self.sink_mass = sn.sinks[self.sink_id][sn_i].mass.astype(self.dtype) 
+        except:
+            if verbose > 0:
+                print('Sink could not be loaded, using "core_pos" and "core_vel" as sink position and velocity')
+            self.sink_pos = self.core_pos
+            self.sink_vel = self.core_vel 
+            self.time = sn.time
+            self.sink_mass = None
 
-    ncells = 0
-    ocell = [0]
-    plist = []
-    pmask = []
-    for p in tqdm.tqdm(sorted_patches, 
-                       disable = not loading_bar, 
-                       desc = 'Loading patches',):
-        p.xyz = np.array(np.meshgrid(p.xi, p.yi, p.zi, indexing='ij'))
-        
-        nbors = [sn.patchid[i] for i in p.nbor_ids if i in sn.patchid]
-        children = [ n for n in nbors if n.level == p.level + 1]
-        leafs = [n for n in children if ((n.position - p.position)**2).sum() < ((p.size)**2).sum()/12]
-        if len(leafs) == 8: continue
-        
+        #Sort the patces according to their level
         if self.data_sphere_au == None:
-            to_extract = np.ones(pp[0].n, dtype=bool)
+            pp = [p for p in sn.patches if (p.level >= self.lv_min) & (p.level <= self.lv_max)]
         else:
-            p.rel_xyz = p.xyz - self.sink_pos[:, None, None, None]
-            p.rel_xyz[p.rel_xyz < -0.5] += 1
-            p.rel_xyz[p.rel_xyz > 0.5] -= 1
-            p.dist_xyz = np.linalg.norm(p.rel_xyz, axis = 0) 
-            to_extract = p.dist_xyz < self.data_sphere_au / self.code2au
-        for lp in leafs: 
-            leaf_extent = np.vstack((lp.position - 0.5 * lp.size, lp.position + 0.5 * lp.size)).T
-            covered_bool = ~np.all((p.xyz > leaf_extent[:, 0, None, None, None]) 
-                                   & (p.xyz < leaf_extent[:, 1, None, None, None]), axis=0)
-            to_extract *= covered_bool
-        
-        plist.append(p)
-        pmask.append(to_extract)
-        ncells += to_extract.sum()
-        ocell.append(ncells)
+            pp = [p for p in sn.patches 
+                if (np.linalg.norm(np.array(np.meshgrid(p.xi, p.yi, p.zi, indexing='ij')) - self.sink_pos[:,None,None,None], axis = 0) < self.data_sphere_au / self.code2au).any()  
+                and p.level >= self.lv_min and p.level <= self.lv_max]
+            
+        w = np.array([p.level for p in pp]).argsort()[::-1]
+        sorted_patches = [pp[w[i]] for i in range(len(pp))]
 
-    if loading_bar: print(f'Total number of cells loaded: {ncells}')
-    ocell = np.array(ocell, dtype=np.int64)
+        ncells = 0
+        ocell = [0]
+        plist = []
+        pmask = []
+        for p in tqdm.tqdm(sorted_patches, 
+                        disable = not loading_bar, 
+                        desc = 'Loading patches',):
+            p.xyz = np.array(np.meshgrid(p.xi, p.yi, p.zi, indexing='ij'))
+            
+            nbors = [sn.patchid[i] for i in p.nbor_ids if i in sn.patchid]
+            children = [ n for n in nbors if n.level == p.level + 1]
+            leafs = [n for n in children if ((n.position - p.position)**2).sum() < ((p.size)**2).sum()/12]
+            if len(leafs) == 8: continue
+            
+            if self.data_sphere_au == None:
+                to_extract = np.ones(pp[0].n, dtype=bool)
+            else:
+                p.rel_xyz = p.xyz - self.sink_pos[:, None, None, None]
+                p.rel_xyz[p.rel_xyz < -0.5] += 1
+                p.rel_xyz[p.rel_xyz > 0.5] -= 1
+                p.dist_xyz = np.linalg.norm(p.rel_xyz, axis = 0) 
+                to_extract = p.dist_xyz < self.data_sphere_au / self.code2au
+            for lp in leafs: 
+                leaf_extent = np.vstack((lp.position - 0.5 * lp.size, lp.position + 0.5 * lp.size)).T
+                covered_bool = ~np.all((p.xyz > leaf_extent[:, 0, None, None, None]) 
+                                    & (p.xyz < leaf_extent[:, 1, None, None, None]), axis=0)
+                to_extract *= covered_bool
+            
+            plist.append(p)
+            pmask.append(to_extract)
+            ncells += to_extract.sum()
+            ocell.append(ncells)
 
-    self.amr['pos'] = np.empty((3, ncells), dtype=self.dtype)
-    self.amr['ds'] = np.empty((ncells,), dtype=self.dtype)
-    self.mhd['vel'] = np.empty((3, ncells), dtype=self.dtype)
-    self.mhd['p'] = np.empty((3, ncells), dtype=self.dtype)
-    self.mhd['B'] = np.empty((3, ncells), dtype=self.dtype)
-    self.mhd['d'] = np.empty((ncells,), dtype=self.dtype)
-    self.mhd['P'] = np.empty((ncells,), dtype=self.dtype)
-    self.mhd['m'] = np.empty((ncells,), dtype=self.dtype)
-    self.mhd['gamma'] = np.empty((ncells,), dtype=self.dtype)
-    self.mhd['phi'] = np.empty((ncells,), dtype=self.dtype)
-    if lagrangian_forces:
-        self.force['gradP'] = np.empty((3, ncells), dtype=self.dtype)
-        self.force['lorentz'] = np.empty((3, ncells), dtype=self.dtype)
-        self.force['inertia'] = np.empty((3, ncells), dtype=self.dtype)
-        self.force['gravity'] = np.empty((3, ncells), dtype=self.dtype)
+        if loading_bar: print(f'Total number of cells loaded: {ncells}')
+        ocell = np.array(ocell, dtype=np.int64)
 
-        if verbose > 0 : print('Including force balance from lagrangian momentum equation')
-    
-    for e,(p,m) in tqdm.tqdm(enumerate(zip(plist, pmask)), 
-    disable = not loading_bar, 
-    total = len(plist),
-    desc = 'Extracting cell data from highest level patches'):
-        self.amr['pos'][:, ocell[e]:ocell[e+1]] = p.xyz[:,m]
-        self.amr['ds'][ocell[e]:ocell[e+1]] = p.ds[0]
-        self.mhd['vel'][0, ocell[e]:ocell[e+1]] = p.var('ux')[m]
-        self.mhd['vel'][1, ocell[e]:ocell[e+1]] = p.var('uy')[m]
-        self.mhd['vel'][2, ocell[e]:ocell[e+1]] = p.var('uz')[m]
-        self.mhd['p'][0, ocell[e]:ocell[e+1]] = p.var('px')[m]
-        self.mhd['p'][1, ocell[e]:ocell[e+1]] = p.var('py')[m]
-        self.mhd['p'][2, ocell[e]:ocell[e+1]] = p.var('pz')[m]
-        self.mhd['B'][0, ocell[e]:ocell[e+1]] = p.var('Bx')[m]
-        self.mhd['B'][1, ocell[e]:ocell[e+1]] = p.var('By')[m]
-        self.mhd['B'][2, ocell[e]:ocell[e+1]] = p.var('Bz')[m]
-        self.mhd['d'][ocell[e]:ocell[e+1]] = p.var('d')[m]
-        self.mhd['m'][ocell[e]:ocell[e+1]] = self.mhd['d'][ocell[e]:ocell[e+1]]*np.prod(p.ds)
-        self.mhd['P'][ocell[e]:ocell[e+1]] = calc_pressure(self.mhd['d'][ocell[e]:ocell[e+1]])
-        self.mhd['gamma'][ocell[e]:ocell[e+1]] = calc_gamma(self.mhd['d'][ocell[e]:ocell[e+1]])
-        self.mhd['phi'][ocell[e]:ocell[e+1]] = p.var('phi')[m]
+        self.amr['pos'] = np.empty((3, ncells), dtype=self.dtype)
+        self.amr['ds'] = np.empty((ncells,), dtype=self.dtype)
+        self.mhd['vel'] = np.empty((3, ncells), dtype=self.dtype)
+        self.mhd['p'] = np.empty((3, ncells), dtype=self.dtype)
+        self.mhd['B'] = np.empty((3, ncells), dtype=self.dtype)
+        self.mhd['d'] = np.empty((ncells,), dtype=self.dtype)
+        self.mhd['P'] = np.empty((ncells,), dtype=self.dtype)
+        self.mhd['m'] = np.empty((ncells,), dtype=self.dtype)
+        self.mhd['gamma'] = np.empty((ncells,), dtype=self.dtype)
+        self.mhd['phi'] = np.empty((ncells,), dtype=self.dtype)
         if lagrangian_forces:
-            self.force['gradP'][:, ocell[e]:ocell[e+1]]   = _pressure_gradient_patch(p)[:, m]
-            self.force['lorentz'][:, ocell[e]:ocell[e+1]] = _magnetic_force_patch(p)[:, m]
-            self.force['inertia'][:, ocell[e]:ocell[e+1]]  = _intertia_patch(p, self.sink_vel)[:, m]
-            self.force['gravity'][:, ocell[e]:ocell[e+1]]  = _gravity_patch(p, self.sink_mass, self.sink_pos, self.G_code)[:, m]
-    if shm:
-        new_folder.cleanup() # delete the temporary shm folder
+            self.force['gradP'] = np.empty((3, ncells), dtype=self.dtype)
+            self.force['lorentz'] = np.empty((3, ncells), dtype=self.dtype)
+            self.force['advective_acc'] = np.empty((3, ncells), dtype=self.dtype)
+            self.force['gravity'] = np.empty((3, ncells), dtype=self.dtype)
+
+            if verbose > 0 : print('Including force balance from lagrangian momentum equation')
+        
+        for e,(p,m) in tqdm.tqdm(enumerate(zip(plist, pmask)), 
+        disable = not loading_bar, 
+        total = len(plist),
+        desc = 'Extracting cell data from highest level patches'):
+            self.amr['pos'][:, ocell[e]:ocell[e+1]] = p.xyz[:,m]
+            self.amr['ds'][ocell[e]:ocell[e+1]] = p.ds[0]
+            self.mhd['vel'][0, ocell[e]:ocell[e+1]] = p.var('ux')[m]
+            self.mhd['vel'][1, ocell[e]:ocell[e+1]] = p.var('uy')[m]
+            self.mhd['vel'][2, ocell[e]:ocell[e+1]] = p.var('uz')[m]
+            self.mhd['p'][0, ocell[e]:ocell[e+1]] = p.var('px')[m]
+            self.mhd['p'][1, ocell[e]:ocell[e+1]] = p.var('py')[m]
+            self.mhd['p'][2, ocell[e]:ocell[e+1]] = p.var('pz')[m]
+            self.mhd['B'][0, ocell[e]:ocell[e+1]] = p.var('Bx')[m]
+            self.mhd['B'][1, ocell[e]:ocell[e+1]] = p.var('By')[m]
+            self.mhd['B'][2, ocell[e]:ocell[e+1]] = p.var('Bz')[m]
+            self.mhd['d'][ocell[e]:ocell[e+1]] = p.var('d')[m]
+            self.mhd['m'][ocell[e]:ocell[e+1]] = self.mhd['d'][ocell[e]:ocell[e+1]]*np.prod(p.ds)
+            self.mhd['P'][ocell[e]:ocell[e+1]] = calc_pressure(self.mhd['d'][ocell[e]:ocell[e+1]])
+            self.mhd['gamma'][ocell[e]:ocell[e+1]] = calc_gamma(self.mhd['d'][ocell[e]:ocell[e+1]])
+            self.mhd['phi'][ocell[e]:ocell[e+1]] = - p.var('phi')[m]
+            if lagrangian_forces:
+                self.force['gradP'][:, ocell[e]:ocell[e+1]]   = _pressure_gradient_patch(p)[:, m]
+                self.force['lorentz'][:, ocell[e]:ocell[e+1]] = _magnetic_force_patch(p)[:, m]
+                self.force['advective_acc'][:, ocell[e]:ocell[e+1]]  = _intertia_patch(p, self.sink_vel)[:, m]
+                self.force['gravity'][:, ocell[e]:ocell[e+1]]  = _gravity_patch(p, self.sink_mass, self.sink_pos, self.G_code)[:, m]
+    finally:
+        if shm:
+            new_folder.cleanup()
 
 dataclass.load_DISPATCH = load_DISPATCH
 
@@ -246,9 +248,9 @@ def _magnetic_force_patch(p):
 
     Jz_centered = Jz[gc:-(gc - 1),gc:-(gc - 1), gc:-gc]
     #_______________________________________________________________________________________
-    return np.stack([-(Jy_centered*Bz - Jz_centered*By), 
-                     -(Jz_centered*Bx - Jx_centered*Bz), 
-                     -(Jx_centered*By - Jy_centered*Bx)])  # = -(∇×B)×B, edge-centred calculation, trimmed to interior
+    return np.stack([(Jy_centered*Bz - Jz_centered*By), 
+                     (Jz_centered*Bx - Jx_centered*Bz), 
+                     (Jx_centered*By - Jy_centered*Bx)])  # = +(∇×B)×B, edge-centred calculation, trimmed to interior, Physical force
 
 
 def _pressure_gradient_patch(p):
@@ -263,11 +265,11 @@ def _pressure_gradient_patch(p):
         # trim guard zones back to the interior
     ng = np.asarray(p.ng); n = np.asarray(p.n)
     sl = (slice(None),) + tuple(slice(ng[k], ng[k]+n[k]) for k in range(3))
-    return f[sl] #!!!! PLUS
+    return -f[sl] #!!!! MINUS
 
 def _gravity_patch(p, sink_mass, sink_pos, G):
     ds  = np.asarray(p.ds)
-    phi = p.var('phi', all=True).copy()
+    phi =  p.var('phi', all=True).copy()
     
     if sink_mass != None:
         dist2sink_22grid = np.array(np.meshgrid(p.x, p.y, p.z, indexing='ij')) - sink_pos[:,None, None, None]
@@ -283,8 +285,9 @@ def _gravity_patch(p, sink_mass, sink_pos, G):
     ng, n = np.asarray(p.ng), np.asarray(p.n)
     sl = (slice(None),) + tuple(slice(ng[k], ng[k]+n[k]) for k in range(3))
     
-    return - f[sl] * p.var('d') #!!!! MINUS                                             
+    return  -f[sl] * p.var('d') #!!!! MINUS                                             
 
+# These functions are copied from the dispatch code, and are used to calculate the magnetic force in a more accurate way than the old method.
 def dnup(q, shift=1, axis=0):
     i = 0 if shift==1 else -1
     if axis == 0 and q.shape[0] > 1:

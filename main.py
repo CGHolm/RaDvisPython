@@ -83,7 +83,7 @@ class dataclass:
              core_vel=None,
              data_sphere_au = None, 
              lv_min = 0,
-             lv_max = 20, 
+             lv_max = 99, 
              verbose = 1, 
              dtype = 'float32', 
              lagrangian_forces = 0,
